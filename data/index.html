@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Battery Monitor</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+      background: #f5f5f5;
+      padding: 10px;
+    }
+    .container {
+      max-width: 100%;
+      margin: 0 auto;
+    }
+    .stats {
+      background: white;
+      border-radius: 8px;
+      padding: 15px;
+      margin-bottom: 15px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      display: flex;
+      justify-content: space-around;
+      gap: 20px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .stats:hover {
+      background: #fafafa;
+    }
+    .stat-item {
+      text-align: center;
+      flex: 1;
+    }
+    .stat-value {
+      color: #333;
+      font-size: 28px;
+      font-weight: 600;
+    }
+    .stat-value.red {
+      color: #ef4444;
+    }
+    .stat-value.amber {
+      color: #f59e0b;
+    }
+    .stat-value.green {
+      color: #10b981;
+    }
+    .chart-container {
+      background: white;
+      border-radius: 8px;
+      padding: 15px;
+      margin-bottom: 15px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .chart-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 10px;
+    }
+    canvas {
+      width: 100%;
+      height: 150px;
+      display: block;
+    }
+    .update-time {
+      text-align: center;
+      color: #999;
+      font-size: 12px;
+      margin-top: 10px;
+    }
+    .settings-content {
+      display: none;
+      background: white;
+      border-radius: 8px;
+      padding: 15px;
+      margin-bottom: 15px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .settings-content.show {
+      display: block;
+    }
+    .setting-item {
+      margin-bottom: 15px;
+    }
+    .setting-label {
+      display: block;
+      margin-bottom: 5px;
+      color: #666;
+      font-size: 14px;
+    }
+    .setting-input {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    .setting-unit {
+      color: #999;
+      font-size: 12px;
+      margin-left: 5px;
+    }
+    .save-button {
+      background: #10b981;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      font-size: 14px;
+      cursor: pointer;
+      width: 100%;
+    }
+    .save-button:hover {
+      background: #059669;
+    }
+    .save-button:disabled {
+      background: #d1d5db;
+      cursor: not-allowed;
+    }
+    .full-button {
+      background: #3b82f6;  /* Blue, distinct from green Save button */
+      color: white;
+      padding: 10px 20px;
+      width: 100%;
+      margin-top: 10px;
+    }
+    .message {
+      margin-top: 10px;
+      padding: 8px;
+      border-radius: 4px;
+      text-align: center;
+      font-size: 14px;
+    }
+    .message.success {
+      background: #d1fae5;
+      color: #065f46;
+    }
+    .message.error {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="stats" onclick="toggleSettings()">
+      <div class="stat-item">
+        <div class="stat-value" id="currentVoltage">--</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value" id="currentCurrent">--</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value" id="currentSoc">--</div>
+      </div>
+    </div>
+    
+    <div class="settings-content" id="settingsContent">
+      <div class="setting-item">
+        <label class="setting-label">
+          Battery Capacity <span class="setting-unit">(Ah)</span>
+        </label>
+        <input type="number" id="batteryCapacity" class="setting-input" min="1" max="10000" step="1">
+      </div>
+      <div class="setting-item">
+        <label class="setting-label">
+          Logging Interval <span class="setting-unit">(minutes)</span>
+        </label>
+        <input type="number" id="logInterval" class="setting-input" min="1" max="1440" step="1">
+      </div>
+      <button class="save-button" onclick="event.stopPropagation(); saveSettings();">Save Settings</button>
+      <button class="full-button" onclick="event.stopPropagation(); setBatteryFull();">Battery Full (Set SOC to 100%)</button>
+      <div id="settingsMessage"></div>
+    </div>
+    
+    <div class="chart-container">
+      <div class="chart-title">Voltage (V)</div>
+      <canvas id="voltageChart"></canvas>
+    </div>
+    
+    <div class="chart-container">
+      <div class="chart-title">Current (A)</div>
+      <canvas id="currentChart"></canvas>
+    </div>
+    
+    <div class="chart-container">
+      <div class="chart-title">Battery Level (%)</div>
+      <canvas id="socChart"></canvas>
+    </div>
+    
+    <div class="update-time" id="updateTime">Loading...</div>
+  </div>
+
+  <script>
+    class SimpleChart {
+      constructor(canvas, color, showZeroLine = false, fixedYMax = null) {
+        this.canvas = canvas;
+        this.ctx = canvas.getContext('2d');
+        this.color = color;
+        this.showZeroLine = showZeroLine;
+        this.fixedYMax = fixedYMax;
+        this.data = [];
+        this.labels = [];
+        this.resize();
+      }
+      
+      resize() {
+        const rect = this.canvas.getBoundingClientRect();
+        this.canvas.width = rect.width * window.devicePixelRatio;
+        this.canvas.height = rect.height * window.devicePixelRatio;
+        this.ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+        this.width = rect.width;
+        this.height = rect.height;
+      }
+      
+      update(labels, data) {
+        this.labels = labels;
+        this.data = data;
+        this.draw();
+      }
+      
+      formatTime(minutes, maxMinutes) {
+        // Calculate relative time from "now" (most recent data point)
+        const relativeMinutes = minutes - maxMinutes;
+        const hours = Math.floor(Math.abs(relativeMinutes) / 60);
+        
+        if (relativeMinutes === 0) {
+          return 'now';
+        } else if (hours === 0) {
+          return relativeMinutes + 'm';
+        } else {
+          return '-' + hours + 'h';
+        }
+      }
+      
+      draw() {
+        const ctx = this.ctx;
+        const padding = { top: 20, right: 20, bottom: 40, left: 50 };
+        const chartWidth = this.width - padding.left - padding.right;
+        const chartHeight = this.height - padding.top - padding.bottom;
+        
+        ctx.clearRect(0, 0, this.width, this.height);
+        
+        // Safety check for undefined or empty data
+        if (!this.data || this.data.length === 0) return;
+        
+        // Find min/max values
+        let minVal = Math.min(...this.data);
+        let maxVal = Math.max(...this.data);
+        
+        // Use fixed max if provided (for SOC chart)
+        if (this.fixedYMax !== null) {
+          maxVal = this.fixedYMax;
+          minVal = 0;  // SOC always starts at 0
+        } else {
+          const range = maxVal - minVal || 1;
+          const padding_val = range * 0.1;
+          minVal = minVal - padding_val;
+          maxVal = maxVal + padding_val;
+        }
+        
+        const yMin = minVal;
+        const yMax = maxVal;
+        const yRange = yMax - yMin;
+        
+        // Draw grid lines and Y-axis labels
+        ctx.strokeStyle = '#e0e0e0';
+        ctx.fillStyle = '#666';
+        ctx.font = '11px sans-serif';
+        ctx.lineWidth = 1;
+        
+        for (let i = 0; i <= 5; i++) {
+          const y = padding.top + (chartHeight / 5) * i;
+          const value = yMax - (yRange / 5) * i;
+          
+          ctx.beginPath();
+          ctx.moveTo(padding.left, y);
+          ctx.lineTo(padding.left + chartWidth, y);
+          ctx.stroke();
+          
+          ctx.textAlign = 'right';
+          ctx.fillText(value.toFixed(1), padding.left - 5, y + 4);
+        }
+        
+        // Draw zero line if enabled (for current chart)
+        if (this.showZeroLine && yMin < 0 && yMax > 0) {
+          const zeroY = padding.top + chartHeight - ((0 - yMin) / yRange) * chartHeight;
+          ctx.strokeStyle = '#000';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(padding.left, zeroY);
+          ctx.lineTo(padding.left + chartWidth, zeroY);
+          ctx.stroke();
+        }
+        
+        // Draw X-axis labels - exactly 5 labels: -48h, -36h, -24h, -12h, now
+        ctx.fillStyle = '#666';
+        ctx.lineWidth = 1;
+        const maxMinutes = this.labels.length > 0 ? this.labels[this.labels.length - 1] : 0;
+        const targetHours = [-48, -36, -24, -12, 0];  // Hours from now
+        
+        for (let i = 0; i < targetHours.length; i++) {
+          const targetMinutes = maxMinutes + (targetHours[i] * 60);
+          
+          // Find closest data point to target time
+          let closestIdx = 0;
+          let minDiff = Math.abs(this.labels[0] - targetMinutes);
+          for (let j = 1; j < this.labels.length; j++) {
+            const diff = Math.abs(this.labels[j] - targetMinutes);
+            if (diff < minDiff) {
+              minDiff = diff;
+              closestIdx = j;
+            }
+          }
+          
+          const x = padding.left + (chartWidth / (this.labels.length - 1)) * closestIdx;
+          const label = targetHours[i] === 0 ? 'now' : targetHours[i] + 'h';
+          
+          ctx.textAlign = 'center';
+          ctx.fillText(label, x, this.height - 10);
+        }
+        
+        // For current chart with zero line, draw two fills
+        if (this.showZeroLine && yMin < 0 && yMax > 0) {
+          const zeroY = padding.top + chartHeight - ((0 - yMin) / yRange) * chartHeight;
+          
+          // Draw positive fill (charging - green)
+          ctx.beginPath();
+          let firstPositive = true;
+          for (let i = 0; i < this.data.length; i++) {
+            const value = this.data[i];
+            const x = padding.left + (chartWidth / (this.data.length - 1)) * i;
+            const y = padding.top + chartHeight - ((value - yMin) / yRange) * chartHeight;
+            
+            if (value >= 0) {
+              if (firstPositive) {
+                ctx.moveTo(x, zeroY);
+                firstPositive = false;
+              }
+              ctx.lineTo(x, y);
+            } else if (!firstPositive) {
+              // Transition from positive to negative
+              ctx.lineTo(x, zeroY);
+              firstPositive = true;
+            }
+          }
+          // Close the path along zero line
+          ctx.lineTo(padding.left + chartWidth, zeroY);
+          ctx.lineTo(padding.left, zeroY);
+          ctx.closePath();
+          ctx.fillStyle = 'rgba(34, 197, 94, 0.2)';  // green
+          ctx.fill();
+          
+          // Draw negative fill (discharging - red)
+          ctx.beginPath();
+          let firstNegative = true;
+          for (let i = 0; i < this.data.length; i++) {
+            const value = this.data[i];
+            const x = padding.left + (chartWidth / (this.data.length - 1)) * i;
+            const y = padding.top + chartHeight - ((value - yMin) / yRange) * chartHeight;
+            
+            if (value < 0) {
+              if (firstNegative) {
+                ctx.moveTo(x, zeroY);
+                firstNegative = false;
+              }
+              ctx.lineTo(x, y);
+            } else if (!firstNegative) {
+              // Transition from negative to positive
+              ctx.lineTo(x, zeroY);
+              firstNegative = true;
+            }
+          }
+          // Close the path along zero line
+          ctx.lineTo(padding.left + chartWidth, zeroY);
+          ctx.lineTo(padding.left, zeroY);
+          ctx.closePath();
+          ctx.fillStyle = 'rgba(239, 68, 68, 0.2)';  // red
+          ctx.fill();
+        } else {
+          // Regular single-color fill for voltage chart
+          ctx.beginPath();
+          this.data.forEach((value, i) => {
+            const x = padding.left + (chartWidth / (this.data.length - 1)) * i;
+            const y = padding.top + chartHeight - ((value - yMin) / yRange) * chartHeight;
+            
+            if (i === 0) {
+              ctx.moveTo(x, y);
+            } else {
+              ctx.lineTo(x, y);
+            }
+          });
+          
+          ctx.lineTo(padding.left + chartWidth, padding.top + chartHeight);
+          ctx.lineTo(padding.left, padding.top + chartHeight);
+          ctx.closePath();
+          
+          ctx.fillStyle = this.color + '20';
+          ctx.fill();
+        }
+        
+        // Draw line on top
+        ctx.beginPath();
+        ctx.strokeStyle = this.color;
+        ctx.lineWidth = 1;
+        
+        this.data.forEach((value, i) => {
+          const x = padding.left + (chartWidth / (this.data.length - 1)) * i;
+          const y = padding.top + chartHeight - ((value - yMin) / yRange) * chartHeight;
+          
+          if (i === 0) {
+            ctx.moveTo(x, y);
+          } else {
+            ctx.lineTo(x, y);
+          }
+        });
+        
+        ctx.stroke();
+      }
+    }
+    
+    let voltageChart, currentChart, socChart;
+    
+    function initCharts() {
+      const voltageCanvas = document.getElementById('voltageChart');
+      const currentCanvas = document.getElementById('currentChart');
+      const socCanvas = document.getElementById('socChart');
+      
+      voltageChart = new SimpleChart(voltageCanvas, '#4BC0C0', false, null);
+      currentChart = new SimpleChart(currentCanvas, '#888888', true, null);  // grey line, show zero line
+      socChart = new SimpleChart(socCanvas, '#10B981', false, 100);  // green, fixed max 100%
+      
+      window.addEventListener('resize', () => {
+        voltageChart.resize();
+        voltageChart.draw();
+        currentChart.resize();
+        currentChart.draw();
+        socChart.resize();
+        socChart.draw();
+      });
+    }
+    
+    async function updateData() {
+      try {
+        const response = await fetch('/data');
+        const result = await response.json();
+        
+        // Handle empty data gracefully
+        if (!result.data || result.data.length === 0) {
+          console.log('No data available yet');
+          document.getElementById('updateTime').textContent = 
+            'Waiting for data... (logs every ' + (await getLogInterval()) + ' minutes)';
+          return;
+        }
+        
+        const timestamps = result.data.map(d => d.t);
+        const voltages = result.data.map(d => d.v);
+        const currents = result.data.map(d => d.c);
+        const soc = result.data.map(d => d.s);
+        
+        voltageChart.update(timestamps, voltages);
+        currentChart.update(timestamps, currents);
+        socChart.update(timestamps, soc);
+        
+        document.getElementById('updateTime').textContent = 
+          'Last updated: ' + new Date().toLocaleTimeString();
+      } catch (error) {
+        console.error('Error fetching data:', error);
+        document.getElementById('updateTime').textContent = 
+          'Error loading data';
+      }
+    }
+    
+    async function getLogInterval() {
+      try {
+        const response = await fetch('/settings');
+        const data = await response.json();
+        return data.logInterval;
+      } catch {
+        return 10; // default
+      }
+    }
+    
+    async function updateCurrent() {
+      try {
+        const response = await fetch('/current');
+        const data = await response.json();
+        
+        // Update voltage with color based on lead acid 12V state
+        const voltageEl = document.getElementById('currentVoltage');
+        voltageEl.textContent = data.voltage.toFixed(1) + ' V';
+        voltageEl.className = 'stat-value';
+        if (data.voltage < 12.0) {
+          voltageEl.classList.add('red');
+        } else if (data.voltage < 12.5) {
+          voltageEl.classList.add('amber');
+        } else {
+          voltageEl.classList.add('green');
+        }
+        
+        // Update current with color based on charge/discharge
+        const currentEl = document.getElementById('currentCurrent');
+        currentEl.textContent = data.current.toFixed(1) + ' A';
+        currentEl.className = 'stat-value';
+        if (data.current < 0) {
+          currentEl.classList.add('red');  // Discharging
+        } else {
+          currentEl.classList.add('green');  // Charging
+        }
+        
+        // Update SOC with color based on percentage
+        const socEl = document.getElementById('currentSoc');
+        socEl.textContent = data.soc.toFixed(0) + ' %';
+        socEl.className = 'stat-value';
+        if (data.soc < 60) {
+          socEl.classList.add('red');
+        } else if (data.soc < 80) {
+          socEl.classList.add('amber');
+        } else {
+          socEl.classList.add('green');
+        }
+      } catch (error) {
+        console.error('Error fetching current values:', error);
+      }
+    }
+    
+    // Settings functions
+    function toggleSettings() {
+      const content = document.getElementById('settingsContent');
+      content.classList.toggle('show');
+    }
+    
+    async function loadSettings() {
+      try {
+        const response = await fetch('/settings');
+        const data = await response.json();
+        document.getElementById('batteryCapacity').value = data.batteryCapacity;
+        document.getElementById('logInterval').value = data.logInterval;
+      } catch (error) {
+        console.error('Error loading settings:', error);
+      }
+    }
+    
+    async function saveSettings() {
+      const batteryCapacity = document.getElementById('batteryCapacity').value;
+      const logInterval = document.getElementById('logInterval').value;
+      const messageEl = document.getElementById('settingsMessage');
+      
+      try {
+        const formData = new FormData();
+        formData.append('batteryCapacity', batteryCapacity);
+        formData.append('logInterval', logInterval);
+        
+        const response = await fetch('/settings', {
+          method: 'POST',
+          body: formData
+        });
+        
+        if (response.ok) {
+          messageEl.className = 'message success';
+          messageEl.textContent = 'Settings saved successfully!';
+          setTimeout(() => { messageEl.textContent = ''; }, 3000);
+        } else {
+          throw new Error('Failed to save settings');
+        }
+      } catch (error) {
+        console.error('Error saving settings:', error);
+        messageEl.className = 'message error';
+        messageEl.textContent = 'Failed to save settings';
+        setTimeout(() => { messageEl.textContent = ''; }, 3000);
+      }
+    }
+
+        async function setBatteryFull() {
+      const messageEl = document.getElementById('settingsMessage');
+      
+      try {
+        const response = await fetch('/setBatteryFull', {
+          method: 'POST'
+        });
+        
+        if (response.ok) {
+          messageEl.className = 'message success';
+          messageEl.textContent = 'Battery SOC set to 100%!';
+          setTimeout(() => { messageEl.textContent = ''; }, 3000);
+          
+          // Refresh current values to show updated SOC
+          setTimeout(updateCurrent, 500);
+        } else {
+          throw new Error('Failed to set battery full');
+        }
+      } catch (error) {
+        console.error('Error setting battery full:', error);
+        messageEl.className = 'message error';
+        messageEl.textContent = 'Failed to set battery full';
+        setTimeout(() => { messageEl.textContent = ''; }, 3000);
+      }
+    }
+    
+    initCharts();
+    loadSettings();
+    updateData();
+    updateCurrent();
+    
+    // Update current values every 2 seconds
+    setInterval(updateCurrent, 2000);
+    
+    // Update chart data every 30 seconds
+    setInterval(updateData, 30000);
+  </script>
+</body>
+</html>
