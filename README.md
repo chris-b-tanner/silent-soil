@@ -1,135 +1,113 @@
-# Battery Monitor - INA226 Data Logger
+# Tilly — People Counter with Audio Playback
 
-A battery monitoring system with web interface for tracking voltage and current over time.
+An ESP32-based people counter that uses two IR beam-break sensors to track occupancy in a room. Audio plays automatically when the room is occupied and stops when it empties.
 
-## Features
-- 📊 Logs data every 10 minutes
-- 💾 Stores up to 48 hours of data (288 points)
-- 🔄 Data persists through power outages
-- 📱 Mobile-responsive web interface
-- 📈 Real-time voltage and current charts with relative time (-48h to now)
-- 🎨 Color-coded indicators: voltage state, charge/discharge status, SOC level
-- 🔢 Physical 7-segment LED displays showing voltage (##.#V) and current (-##.#A)
-- 🔋 State of Charge (SOC) tracking with amp-hour integration
-- 📐 Peukert's Law applied for accurate SOC at varying discharge rates
-- ⚡ Automatic full battery detection (resets SOC to 100%)
-- ⚡ Tracks both discharge and charging
+## How It Works
 
-## Color Coding
+- **Entry beam (GPIO 4):** increments occupancy count
+- **Exit beam (GPIO 16):** decrements occupancy count
+- **Occupancy > 0:** loops `1.wav` from SD card through I2S amplifier
+- **Occupancy reaches 0:** stops playback
+- A short beep confirms each entry/exit event
+- Current occupancy count is printed to serial
 
-The dashboard uses intuitive color coding for quick battery status assessment:
+Audio runs on Core 0; beam sensing runs on Core 1 (loop), keeping I2S DMA feeding uninterrupted.
 
-### Voltage (12V Lead Acid):
-- 🔴 **Red** (< 12.0V): Discharged - battery needs charging
-- 🟠 **Amber** (12.0-12.5V): Partially charged
-- 🟢 **Green** (≥ 12.5V): Good charge state
+## Hardware Requirements
 
-### Current:
-- 🔴 **Red** (negative): Discharging - consuming power
-- 🟢 **Green** (positive): Charging - receiving power
+### Microcontroller
+- **ESP32 dev board** (38-pin, dual-core)
 
-### State of Charge (SOC):
-- 🔴 **Red** (< 60%): Low - charge soon
-- 🟠 **Amber** (60-80%): Moderate
-- 🟢 **Green** (≥ 80%): Good
+### IR Beam-Break Sensors × 2
+| Signal | GPIO |
+|--------|------|
+| Entry beam output | 4 |
+| Exit beam output | 16 |
 
-### How SOC Tracking Works
-1. **Initialization**: Starts at 100% or loads saved value from flash
-2. **Integration**: Every 10 seconds, calculates amp-hours consumed/charged
-3. **Peukert Correction**: When discharging, applies Peukert's Law to account for reduced capacity at higher discharge rates
-4. **Calculation**: `Remaining Ah = Previous Ah + (Current × Time × Peukert Factor)`
-5. **Percentage**: `SOC% = (Remaining Ah / 300 Ah) × 100`
-6. **Full Detection**: Automatically resets to 100% when battery reaches full charge
-7. **Persistence**: SOC saved every minute and restored after power loss
+Both sensors require an **external pull-up resistor** to 3.3 V. Beam intact = HIGH; beam broken = LOW.
 
-## Setup Instructions
+### MAX98357A I2S Amplifier Breakout
+| Breakout pin | ESP32 GPIO |
+|--------------|------------|
+| LRC (LRCLK) | 25 |
+| BCLK | 26 |
+| DIN | 27 |
+| GND | GND |
+| VIN | **5 V** (use 5 V — 3.3 V causes significantly more noise) |
+| SD | Pull HIGH to VIN/3.3 V to enable (or leave floating if breakout has internal pull-up) |
+| GAIN | Leave floating for 9 dB gain (or connect to GND/VIN to change gain) |
 
-### Hardware Requirements
+Connect an **8 Ω speaker** to the breakout's speaker terminals.
 
-**INA226 Current Sensor:**
-- SDA → GPIO21
-- SCL → GPIO22
-- 0.0015Ω shunt resistor
+Add a **100 µF electrolytic + 100 nF ceramic decoupling cap** on the VIN rail close to the breakout to reduce audio noise.
 
-**Display Operation:**
-- Multiplexed at 500Hz (each digit lit 1/6 of the time)
-- No additional driver ICs required
-- Voltage always shows 1 decimal place (e.g., 12.5V)
-- Current shows 1 decimal when |I| < 10A (e.g., -9.9A)
-- Current shows 0 decimal when |I| ≥ 10A (e.g., -50A)
-- Top row shows the SoC for 1 second every 10 seconds.
-- When charging (negative current), decimal place of current line is flashing.
+### SD Card Module (SPI)
+| SD module pin | ESP32 GPIO |
+|---------------|------------|
+| CS | 5 |
+| SCK | 18 (VSPI default) |
+| MOSI | 23 (VSPI default) |
+| MISO | 19 (VSPI default) |
+| VCC | 3.3 V or 5 V (per module) |
+| GND | GND |
 
-### Software Setup
+SPI runs at 8 MHz. Higher speeds introduce RF noise that couples into I2S lines.
 
-### 1. Upload the Filesystem (IMPORTANT!)
-Before uploading the main code, you must upload the web interface files to the ESP32's filesystem:
+### Beeper
+| | GPIO |
+|--|------|
+| Piezo/buzzer positive | 22 |
+| Negative | GND |
 
-**In PlatformIO:**
-- Click on the PlatformIO icon in the sidebar
-- Under "PROJECT TASKS" → "Platform" → click "Build Filesystem Image"
-- Then click "Upload Filesystem Image"
+A short 20 ms pulse confirms each entry or exit event.
 
-**Or via command line:**
+## Audio File
+
+Place a file named **`1.wav`** in the root of the SD card. The WAV parser supports:
+- Any sample rate (44100 Hz recommended)
+- 16-bit PCM
+- Mono or stereo
+
+The file loops continuously while the room is occupied. A 50 ms software fade-in on each play start suppresses the turn-on pop.
+
+## Serial Output
+
+Connect at **115200 baud**. Example output:
+
+```
+SD card ready
+People counter ready
+[    ] People in room: 0
+[IN ] People in room: 1
+[OUT] People in room: 0
+```
+
+## Beam Timing Parameters
+
+Adjustable in `src/main.cpp`:
+
+| `#define` | Default | Purpose |
+|-----------|---------|---------|
+| `DEBOUNCE_MS` | 30 ms | Ignores transitions shorter than this |
+| `MIN_BREAK_MS` | 80 ms | Minimum break duration to count as a crossing |
+| `MAX_BREAK_MS` | 8000 ms | Resets a stuck/blocked beam after this time |
+
+## Building and Flashing
+
+Requires [PlatformIO](https://platformio.org/).
+
 ```bash
-pio run --target buildfs
-pio run --target uploadfs
+pio run --target upload
+pio device monitor
 ```
 
-This uploads the `data/index.html` file to the ESP32's LittleFS filesystem.
-
-### 2. Upload the Code
-After uploading the filesystem, upload the main code as normal:
-- Click "Upload" button in PlatformIO, or
-- Run `pio run --target upload`
-
-### 3. Connect and View
-1. Wait for the ESP32 to boot
-2. Connect to WiFi network (no password)
-3. Open browser and navigate to `http://192.168.4.1`
-
-## Configuration
-
-### Shunt Resistor
-Current shunt resistor value: **0.0015Ω** (1.5 milliohm)
-Maximum measurable current: **~50A**
-
-To change these values, edit in `src/main.cpp`:
-```cpp
-#define SHUNT_RESISTOR 0.0015
-ina.setMaxCurrentShunt(50.0, SHUNT_RESISTOR);
-```
-
-### Battery Capacity
-Battery bank capacity: to set, click the stats on the dashboard.
-
-**Peukert's Law:**
-The system applies Peukert's Law to account for reduced effective capacity at higher discharge rates. When discharging, the effective amp-hours consumed are multiplied by `(I/C20)^(n-1)` where:
-- I = discharge current (A)
-- C20 = 20-hour discharge rate (15A for 300Ah battery)
-- n = Peukert exponent (1.1 for typical lead acid)
-
-This means discharging at 30A consumes more "effective" amp-hours than the actual current would suggest.
-
-**Full Battery Detection:**
-Battery is considered full when:
-- Voltage ≥ 13.8V AND
-- Current < 1.0A (charging/discharging)
-- Conditions sustained for 60 seconds
-
-When detected, SOC resets to 100%. Adjust thresholds in `src/main.cpp`:
-```cpp
-#define FULL_VOLTAGE_THRESHOLD 13.8
-#define FULL_CURRENT_THRESHOLD 1.0
-#define FULL_DETECTION_TIME 60000
-```
+Platform: `espressif32@6.9.0` (IDF 4.x). No external libraries are required — the project uses the native ESP-IDF I2S driver and the built-in Arduino SD library.
 
 ## File Structure
+
 ```
-ina226_test/
-├── platformio.ini          # PlatformIO configuration
-├── src/
-│   └── main.cpp           # Main ESP32 code
-└── data/
-    └── index.html         # Web interface (uploaded to ESP32)
+Tilly/
+├── platformio.ini
+└── src/
+    └── main.cpp
 ```
