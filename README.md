@@ -1,4 +1,4 @@
-# Tilly — People Counter with Audio Playback
+# SilentSoil — People Counter with Audio Playback
 
 An ESP32-based people counter that uses two IR beam-break sensors to track occupancy in a room. Audio plays automatically when the room is occupied and stops when it empties.
 
@@ -106,7 +106,7 @@ Platform: `espressif32@6.9.0` (IDF 4.x). No external libraries are required — 
 ## File Structure
 
 ```
-Tilly/
+SilentSoil/
 ├── platformio.ini
 └── src/
     └── main.cpp
