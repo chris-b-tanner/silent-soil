@@ -26,8 +26,10 @@
 
 // ---- Audio command flags (written by Core 1, read by Core 0) ----
 enum AudioCmd { AUDIO_NONE, AUDIO_PLAY, AUDIO_STOP };
-volatile AudioCmd audioCmd     = AUDIO_NONE;
-volatile bool     audioPlaying = false;
+volatile AudioCmd audioCmd      = AUDIO_NONE;
+volatile bool     audioPlaying  = false;
+volatile int      audioTarget   = 0;  // track to play (1-5), set by Core 1
+volatile int      audioCurrentTrack = 0;  // track currently open, set by Core 0
 
 // ---- Beam sensor state machine ----
 enum State { BEAM_INTACT, DEBOUNCING_BREAK, BEAM_BROKEN, DEBOUNCING_RESTORE };
@@ -70,7 +72,11 @@ void applyFadeIn(uint8_t *buf, size_t bytes) {
     }
 }
 
-bool openWav(const char *path) {
+bool openWav(int track) {
+    if (wavFile) wavFile.close();
+
+    char path[12];
+    snprintf(path, sizeof(path), "/%d.wav", track);
     wavFile = SD.open(path);
     if (!wavFile) { Serial.println("[ERROR] Cannot open " + String(path)); return false; }
 
@@ -139,9 +145,11 @@ void audioTask(void *) {
     while (true) {
         if (audioCmd == AUDIO_PLAY) {
             audioCmd = AUDIO_NONE;
-            if (openWav("/1.wav")) {
+            int track = audioTarget;
+            if (openWav(track)) {
+                audioCurrentTrack = track;
                 audioPlaying = true;
-                Serial.println("Audio start");
+                Serial.printf("Audio start: track %d\n", track);
             }
         }
 
@@ -151,6 +159,7 @@ void audioTask(void *) {
                 i2s_zero_dma_buffer(I2S_PORT);
                 wavFile.close();
                 audioPlaying = false;
+                audioCurrentTrack = 0;
                 Serial.println("Audio stop");
             } else {
                 if (!wavFile.available()) wavFile.seek(wavDataStart);
@@ -210,18 +219,34 @@ bool processSensor(Sensor &s) {
     return false;
 }
 
+static int trackForOccupancy(int32_t occ) {
+    if (occ <= 0) return 0;
+    if (occ >= 5) return 5;
+    return (int)occ;
+}
+
+static void updateAudio() {
+    int newTrack = trackForOccupancy(occupancy);
+    if (newTrack == 0) {
+        if (audioPlaying) audioCmd = AUDIO_STOP;
+    } else if (newTrack != audioCurrentTrack || !audioPlaying) {
+        audioTarget = newTrack;
+        audioCmd    = AUDIO_PLAY;
+    }
+}
+
 void onPersonIn() {
     occupancy++;
     digitalWrite(BEEPER_PIN, HIGH); delay(20); digitalWrite(BEEPER_PIN, LOW);
     Serial.printf("[IN ] People in room: %d\n", occupancy);
-    if (occupancy == 1) audioCmd = AUDIO_PLAY;   // room was empty — start audio
+    updateAudio();
 }
 
 void onPersonOut() {
     if (occupancy > 0) occupancy--;
     digitalWrite(BEEPER_PIN, HIGH); delay(20); digitalWrite(BEEPER_PIN, LOW);
     Serial.printf("[OUT] People in room: %d\n", occupancy);
-    if (occupancy == 0) audioCmd = AUDIO_STOP;   // room now empty — stop audio
+    updateAudio();
 }
 
 void setup() {

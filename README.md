@@ -6,8 +6,9 @@ An ESP32-based people counter that uses two IR beam-break sensors to track occup
 
 - **Entry beam (GPIO 4):** increments occupancy count
 - **Exit beam (GPIO 16):** decrements occupancy count
-- **Occupancy > 0:** loops `1.wav` from SD card through I2S amplifier
+- **Occupancy 1:** loops `1.wav`; **2:** `2.wav`; **3:** `3.wav`; **4:** `4.wav`; **5+:** `5.wav`
 - **Occupancy reaches 0:** stops playback
+- Track switches immediately when occupancy crosses a threshold
 - A short beep confirms each entry/exit event
 - Current occupancy count is printed to serial
 
@@ -63,12 +64,12 @@ A short 20 ms pulse confirms each entry or exit event.
 
 ## Audio File
 
-Place a file named **`1.wav`** in the root of the SD card. The WAV parser supports:
+Place files named **`1.wav`** through **`5.wav`** in the root of the SD card. The WAV parser supports:
 - Any sample rate (44100 Hz recommended)
 - 16-bit PCM
 - Mono or stereo
 
-The file loops continuously while the room is occupied. A 50 ms software fade-in on each play start suppresses the turn-on pop.
+The active file loops continuously. When occupancy crosses a threshold the new track starts immediately. A 50 ms software fade-in on each play start suppresses the turn-on pop.
 
 ## Serial Output
 
